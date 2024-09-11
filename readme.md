@@ -2,6 +2,12 @@
 
 This repository contains the necessary components for setting up and running the node enclave ( if you dont have the node enclave runnning, Its recommended to run it first) . Follow these detailed, step-by-step instructions to get your node_ops operational.
 
+## Quick Install
+- Copy the ops.sh and run it in your terminal
+- Enter the ip and hotkey of the enclave
+- Finally enter the Groq, Openai, Gemini, Claude keys
+- Check the Benchmark and fetch usage
+
 ## Prerequisites
 - Have the Enclave Running and verify if its generating a report first with a known IP address
 - Rust (latest stable version)

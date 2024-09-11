@@ -8,10 +8,11 @@ from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 import os
 import base64
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI, HTTPException, Header, Depends
 from pydantic import BaseModel
 import uvicorn
 import re
+import argparse
 
 # Set up logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -23,28 +24,66 @@ pinned_certs = {}
 app = FastAPI()
 
 # Configuration
-HOST = "103.46.xx.xx"
 PORT = 8080
-API_KEY = "c5fdxb48-0axa-418x-8c08-92xx71148bxx"  # Replace with your actual API key for benchmark and API key update
+API_KEY = None  # We'll set this based on the IP address
+
+async def load_api_key(ip_address):
+    try:
+        async with aiofiles.open('apikey.json', 'r') as f:
+            content = await f.read()
+            api_keys = json.loads(content)
+            if ip_address in api_keys:
+                return api_keys[ip_address]
+            else:
+                raise ValueError(f"No API key found for IP: {ip_address}")
+    except FileNotFoundError:
+        raise FileNotFoundError("apikey.json file not found")
+    except json.JSONDecodeError:
+        raise ValueError("Invalid JSON in apikey.json")
+
+async def get_api_key():
+    if API_KEY is None:
+        raise HTTPException(status_code=500, detail="API key not set")
+    return API_KEY
 
 async def load_cert_from_db(host):
     db_path = os.path.join(os.path.dirname(__file__), 'Attestation-server', 'db.json')
     try:
         async with aiofiles.open(db_path, 'r') as f:
             content = await f.read()
-            data = json.loads(content)
-            if data['ip'] == host:
-                cert = data['cert']
-                # Clean up the certificate
-                cert = re.sub(r'\s+', '\n', cert)
-                cert = f"-----BEGIN CERTIFICATE-----\n{cert}\n-----END CERTIFICATE-----"
-                logger.info(f"Certificate found in db.json for {host}")
-                return cert
+        logger.debug(f"Raw content of db.json: {content}")
+
+        # Split the content into separate JSON objects/arrays
+        json_parts = content.strip().split('\n')
+        
+        all_entries = []
+        for part in json_parts:
+            try:
+                parsed = json.loads(part)
+                if isinstance(parsed, list):
+                    all_entries.extend(parsed)
+                elif isinstance(parsed, dict):
+                    all_entries.append(parsed)
+            except json.JSONDecodeError:
+                logger.warning(f"Skipping invalid JSON: {part}")
+
+        logger.debug(f"Parsed JSON data: {all_entries}")
+
+        for entry in all_entries:
+            if entry.get('ip') == host:
+                cert = entry.get('cert')
+                if cert:
+                    logger.info(f"Certificate found in db.json for {host}")
+                    return cert
+        
+        logger.warning(f"No certificate found in db.json for {host}")
+        return None
+
     except FileNotFoundError:
         logger.warning(f"db.json not found at {db_path}")
-    except json.JSONDecodeError:
-        logger.error("Error decoding db.json")
-    logger.warning(f"No certificate found in db.json for {host}")
+    except Exception as e:
+        logger.error(f"Unexpected error while loading cert from db: {str(e)}")
+    
     return None
 
 async def verify_cert(cert_der, trusted_cert_pem):
@@ -155,10 +194,10 @@ async def fetch_from_server(endpoint: str, method: str, api_key: str = None, dat
             return None
 
 @app.get("/run-benchmark")
-async def api_run_benchmark():
+async def api_run_benchmark(api_key: str = Depends(get_api_key)):
     logger.info("Starting benchmark run")
     try:
-        result = await fetch_from_server("/run-benchmark", "GET", API_KEY)
+        result = await fetch_from_server("/run-benchmark", "GET", api_key)
         if result:
             logger.info("Benchmark completed successfully")
             return result
@@ -170,28 +209,50 @@ async def api_run_benchmark():
         raise HTTPException(status_code=500, detail=f"An error occurred while running the benchmark: {str(e)}")
 
 @app.get("/fetch_token_usage/")
-async def api_fetch_token_usage():
-    result = await fetch_from_server("/fetch_token_usage/", "GET")
+async def api_fetch_token_usage(api_key: str = Depends(get_api_key)):
+    result = await fetch_from_server("/fetch_token_usage/", "GET", api_key)
     if result:
         return result
     else:
         raise HTTPException(status_code=500, detail="Failed to fetch token usage data")
 
 @app.get("/apikeys/{api_name}")
-async def api_get_apikeys(api_name: str):
-    result = await fetch_from_server(f"/apikeys/{api_name}", "GET", API_KEY)
+async def api_get_apikeys(api_name: str, api_key: str = Depends(get_api_key)):
+    result = await fetch_from_server(f"/apikeys/{api_name}", "GET", api_key)
     if result:
         return result
     else:
         raise HTTPException(status_code=500, detail=f"Failed to get API keys for {api_name}")
 
 @app.put("/apikeys/{api_name}")
-async def api_update_apikeys(api_name: str, api_keys: dict):
-    result = await fetch_from_server(f"/apikeys/{api_name}", "PUT", API_KEY, api_keys)
+async def api_update_apikeys(api_name: str, api_keys: dict, api_key: str = Depends(get_api_key)):
+    result = await fetch_from_server(f"/apikeys/{api_name}", "PUT", api_key, api_keys)
     if result:
         return result
     else:
         raise HTTPException(status_code=500, detail=f"Failed to update API keys for {api_name}")
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8088)
+    parser = argparse.ArgumentParser(description="Run the main API server.")
+    parser.add_argument("--ip", required=True, help="IP address of the node")
+    args = parser.parse_args()
+
+    HOST = args.ip
+
+    try:
+        API_KEY = asyncio.run(load_api_key(HOST))
+        logger.info(f"API key loaded for IP: {HOST}")
+        
+        # Check if port 8088 is in use
+        import socket
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        result = sock.connect_ex(('localhost', 8088))
+        if result == 0:
+            logger.error("Port 8088 is already in use. Please free the port and try again.")
+            exit(1)
+        sock.close()
+
+        uvicorn.run(app, host="0.0.0.0", port=8088)
+    except Exception as e:
+        logger.error(f"Failed to start the server: {str(e)}")
+        exit(1)

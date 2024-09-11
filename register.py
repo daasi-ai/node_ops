@@ -8,6 +8,7 @@ import asyncio
 import logging
 import argparse
 import os
+import aiohttp
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -36,15 +37,22 @@ async def load_cert_from_db(host):
     try:
         async with aiofiles.open(db_path, 'r') as f:
             content = await f.read()
-            for line in content.splitlines():
-                entry = json.loads(line)
-                if entry['ip'] == host:
-                    return entry['cert']
+            logging.info(f"db.json content: {content}")
+            data = json.loads(content)
+            if isinstance(data, dict) and 'ip' in data and data['ip'] == host:
+                cert = data['cert']
+                if isinstance(cert, list):
+                    cert = ''.join(chr(x) for x in cert)
+                return cert
+            else:
+                logging.error(f"Invalid data structure in db.json: {data}")
     except FileNotFoundError:
-        print(f"db.json not found at {db_path}")
-    except json.JSONDecodeError:
-        print("Error decoding db.json")
-    print(f"No certificate found in db.json for {host}")
+        logging.error(f"db.json not found at {db_path}")
+    except json.JSONDecodeError as e:
+        logging.error(f"Error decoding db.json: {str(e)}")
+    except Exception as e:
+        logging.error(f"Unexpected error reading db.json: {str(e)}")
+    logging.warning(f"No certificate found in db.json for {host}")
     return None
 
 async def get_cert_hash_from_db(host):
@@ -143,18 +151,52 @@ async def save_api_key(ip, api_key):
     async with aiofiles.open('apikey.json', 'w') as f:
         await f.write(json.dumps(data, indent=2))
 
+async def fetch_cert_from_server(host, port=8090):
+    url = f"http://{host}:{port}/report"
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as response:
+            if response.status == 200:
+                data = await response.json()
+                return data.get('cert')
+    return None
+
+async def save_cert_to_db(host, cert):
+    db_path = os.path.join(os.path.dirname(__file__), 'Attestation-server', 'db.json')
+    data = {'ip': host, 'cert': cert}
+    async with aiofiles.open(db_path, 'w') as f:
+        await f.write(json.dumps(data))
+
+async def register_node(host, port, endpoint, hotkey):
+    cert = await load_cert_from_db(host)
+    if cert is None:
+        logging.info(f"Certificate not found in db.json for {host}. Fetching from server...")
+        cert = await fetch_cert_from_server(host)
+        if cert:
+            await save_cert_to_db(host, cert)
+        else:
+            logging.error(f"Failed to fetch certificate for {host}")
+            return None
+
+    try:
+        result = await make_api_request(host, port, endpoint, hotkey)
+        return result
+    except Exception as e:
+        logging.error(f"Registration failed: {str(e)}.")
+        return None
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Register a node and get an API key.")
     parser.add_argument("--ip", required=True, help="IP address of the node to register")
+    parser.add_argument("--hotkey", required=True, help="Hotkey for node registration")
     args = parser.parse_args()
 
     host = args.ip
     port = 8101
     endpoint = "/register"
-    hotkey = "xxxx"
+    hotkey = args.hotkey
 
-    try:
-        result = asyncio.run(make_api_request(host, port, endpoint, hotkey))
+    result = asyncio.run(register_node(host, port, endpoint, hotkey))
+    if result:
         logging.info(f"Response: {result}")
         json_result = json.loads(result)
         if 'api_key' in json_result:
@@ -162,7 +204,10 @@ if __name__ == "__main__":
             logging.info(f"API Key received: {api_key}")
             asyncio.run(save_api_key(host, api_key))
             logging.info(f"API Key saved for {host}")
+            print("SUCCESS")  # Signal success to the shell script
         else:
             logging.warning("Failed to get API key")
-    except Exception as e:
-        logging.error(f"An error occurred: {e}")
+            print("FAILURE")  # Signal failure to the shell script
+    else:
+        logging.error("Registration failed")
+        print("FAILURE")  # Signal failure to the shell script
