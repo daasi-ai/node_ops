@@ -3,10 +3,34 @@
 This repository contains the necessary components for setting up and running the node enclave ( if you dont have the node enclave runnning, Its recommended to run it first) . Follow these detailed, step-by-step instructions to get your node_ops operational.
 
 ## Quick Install
-- Copy the ops.sh and run it in your terminal
-- Enter the ip and hotkey of the enclave
-- Finally enter the Groq, Openai, Gemini, Claude keys
-- Check the Benchmark and fetch usage
+
+Follow these steps to quickly set up your node:
+
+1. Create a file named `ops.sh` and copy the following code into it:
+
+2. Make the script executable:
+   ```bash
+   chmod +x ops.sh
+   ```
+
+3. Run the script:
+   ```bash
+   ./ops.sh
+   ```
+
+4. When prompted, enter your enclave IP address and hotkey.
+
+5. To add your API keys (e.g., Groq), create a JSON file named `groq.json` with your API key:
+   ```json
+   {
+     "api_key": "your-groq-api-key-here"
+   }
+   ```
+
+6. Use the script's menu to manage API keys and run benchmarks.
+
+   - Choose "Manage API keys" to add your Groq keys from the `groq.json` file.
+   - You can add other API keys (OpenAI, Gemini, Claude) in a similar manner.
 
 ## Prerequisites
 - Have the Enclave Running and verify if its generating a report first with a known IP address

@@ -1,4 +1,4 @@
-echo '#!/bin/bash
+#!/bin/bash
 
 set -e
 
@@ -507,7 +507,7 @@ main() {
         read -p "Enter your choice (1-3): " choice
 
         case $choice in
-            1) 
+            1)
                 run_benchmark
                 fetch_token_usage
                 ;;
@@ -523,4 +523,4 @@ main() {
 }
 
 # Run the main function
-main' > ops.sh && chmod +x ops.sh && ./run.sh
+main
